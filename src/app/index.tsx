@@ -1,130 +1,310 @@
-import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
-import { useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { mockResult, PrescriptionData } from './mock';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { BottomTabInset } from '@/constants/theme';
+import { prepareImage } from '@/lib/image';
+import { CONFIDENCE_LABEL, scanImage, type Confidence, type ScanResult } from '@/lib/scan';
+import { buildSpeech } from '@/lib/speech';
+
+type Status = 'idle' | 'loading' | 'done' | 'error';
+
+const CONFIDENCE_STYLE: Record<Confidence, { bg: string; fg: string; icon: string }> = {
+  high: { bg: '#DDF3E6', fg: '#0B5A33', icon: '✓' },
+  medium: { bg: '#FFF1CC', fg: '#7A4B00', icon: '!' },
+  low: { bg: '#FBE0DE', fg: '#9B1C1C', icon: '?' },
+};
 
 export default function HomeScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
-  const [result, setResult] = useState<PrescriptionData | null>(null);
+  const [result, setResult] = useState<ScanResult | null>(null);
+  const [isMock, setIsMock] = useState(false);
+  const [status, setStatus] = useState<Status>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [viVoiceMissing, setViVoiceMissing] = useState(false);
 
-  const processImage = async (uri: string) => {
+  // Kiểm tra máy Android có giọng đọc tiếng Việt chưa; dừng đọc khi rời màn hình.
+  useEffect(() => {
+    Speech.getAvailableVoicesAsync()
+      .then((voices) => {
+        const hasVietnamese = voices.some((v) => v.language?.toLowerCase().startsWith('vi'));
+        if (voices.length > 0 && !hasVietnamese) setViVoiceMissing(true);
+      })
+      .catch(() => {});
+    return () => {
+      Speech.stop();
+    };
+  }, []);
+
+  const speak = (data: ScanResult) => {
+    Speech.stop();
+    Speech.speak(buildSpeech(data), {
+      language: 'vi-VN',
+      rate: 0.85,
+      onStart: () => setSpeaking(true),
+      onDone: () => setSpeaking(false),
+      onStopped: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
+  };
+
+  const stopSpeaking = () => {
+    Speech.stop();
+    setSpeaking(false);
+  };
+
+  const processAsset = async (asset: ImagePicker.ImagePickerAsset) => {
+    stopSpeaking();
+    setResult(null);
+    setErrorMessage('');
+    setStatus('loading');
     try {
-      // Bước 4: Nén ảnh về rộng 1280px, định dạng JPEG, chất lượng 0.7
-      const manipResult = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ resize: { width: 1280 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      const prepared = await prepareImage(asset.uri, asset.width);
+      setImageUri(prepared.uri);
+      const outcome = await scanImage(prepared.base64);
+      setResult(outcome.result);
+      setIsMock(outcome.isMock);
+      setStatus('done');
+      speak(outcome.result); // Tự đọc ngay khi có kết quả
+    } catch (error: any) {
+      console.error('Lỗi xử lý ảnh', error);
+      setErrorMessage(
+        error?.name === 'AbortError'
+          ? 'Máy chủ phản hồi quá lâu. Hãy kiểm tra mạng rồi thử lại.'
+          : 'Không đọc được hộp thuốc. Hãy chụp lại, gần hơn và đủ sáng.'
       );
-      
-      if (manipResult.base64) {
-        // Tính xấp xỉ dung lượng base64 ra MB
-        const sizeMB = (manipResult.base64.length * 0.75) / (1024 * 1024);
-        console.log(`Dung lượng base64 sau nén: ${sizeMB.toFixed(2)} MB`);
-      }
-      
-      setImageUri(manipResult.uri);
-      setResult(mockResult); // Bước 5: Hiện dữ liệu giả định mẫu
-    } catch (error) {
-      console.error("Lỗi nén ảnh", error);
+      setStatus('error');
     }
   };
 
-  // Bước 3: Hàm chụp ảnh từ Camera
   const takePhoto = async () => {
     setPermissionDenied(false);
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permissionResult.granted) {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
       setPermissionDenied(true);
       return;
     }
-    const pickerResult = await ImagePicker.launchCameraAsync({ quality: 0.7 });
-    if (!pickerResult.canceled) processImage(pickerResult.assets[0].uri);
+    const picked = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!picked.canceled) processAsset(picked.assets[0]);
   };
 
-  // Bước 3: Hàm chọn ảnh từ thư viện máy tính/điện thoại để test nhanh
   const pickImage = async () => {
     setPermissionDenied(false);
-    const pickerResult = await ImagePicker.launchImageLibraryAsync({ quality: 0.7 });
-    if (!pickerResult.canceled) processImage(pickerResult.assets[0].uri);
+    const picked = await ImagePicker.launchImageLibraryAsync({ quality: 0.7 });
+    if (!picked.canceled) processAsset(picked.assets[0]);
   };
 
-  // Bước 6: Hàm ghép chuỗi văn bản để đọc to
-  const buildSpeech = (data: PrescriptionData) => {
-    return `Tên thuốc là ${data.medicineName}. Cách dùng: ${data.usage}. Cần tránh: ${data.warnings}. Độ tin cậy của phân tích là ${data.confidence}.`;
-  };
-
-  const speakText = () => {
-    if (result) Speech.speak(buildSpeech(result), { language: 'vi-VN' });
-  };
+  const loading = status === 'loading';
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.appTitle}>💊 MedAssistant - Vai trò B</Text>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Đọc Thuốc</Text>
+        <Text style={styles.subtitle}>Chụp hộp thuốc, máy sẽ đọc to cho bác nghe.</Text>
 
-      <TouchableOpacity style={styles.buttonMain} onPress={takePhoto}>
-        <Text style={styles.buttonText}>📸 Chụp hộp thuốc</Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity style={styles.buttonSecondary} onPress={pickImage}>
-        <Text style={styles.buttonText}>🖼️ Chọn ảnh từ thư viện</Text>
-      </TouchableOpacity>
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.btnMain, pressed && styles.pressed, loading && styles.disabled]}
+          onPress={takePhoto}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Chụp hộp thuốc">
+          <Text style={styles.btnText}>Chụp hộp thuốc</Text>
+        </Pressable>
 
-      {permissionDenied && (
-        <Text style={styles.errorText}>
-          Ứng dụng cần quyền truy cập Camera. Vui lòng cấp quyền!
-        </Text>
-      )}
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed, loading && styles.disabled]}
+          onPress={pickImage}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Chọn ảnh có sẵn trong máy">
+          <Text style={styles.btnSecondaryText}>Chọn ảnh có sẵn</Text>
+        </Pressable>
 
-      {imageUri && <Image source={{ uri: imageUri }} style={styles.image} />}
-
-      {/* Bước 5: Giao diện kết quả chữ lớn, tương phản cao */}
-      {result && (
-        <View style={styles.resultCard}>
-          <Text style={styles.label}>💊 Thuốc này để làm gì:</Text>
-          <Text style={styles.value}>{result.medicineName}</Text>
-
-          <Text style={styles.label}>🕒 Cách dùng:</Text>
-          <Text style={styles.value}>{result.usage}</Text>
-
-          <Text style={styles.label}>⚠️ Cần tránh:</Text>
-          <Text style={styles.value}>{result.warnings}</Text>
-
-          <Text style={styles.label}>✅ Mức chắc chắn:</Text>
-          <Text style={styles.value}>{result.confidence}</Text>
-
-          <div style={{ width: '100%' }}>
-            <TouchableOpacity style={styles.buttonSpeech} onPress={speakText}>
-              <Text style={styles.buttonText}>🔊 Đọc lại kết quả</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.buttonStop} onPress={() => Speech.stop()}>
-              <Text style={styles.buttonText}>⏹️ Dừng đọc</Text>
-            </TouchableOpacity>
-          </div>
-
-          <Text style={styles.warningFooter}>
-            Ứng dụng không thay thế bác sĩ hay dược sĩ.
+        {permissionDenied && (
+          <Text style={styles.errorText}>
+            Cần cho phép dùng camera. Vào Cài đặt của máy, chọn ứng dụng này, rồi bật quyền Camera.
           </Text>
-        </View>
-      )}
-    </ScrollView>
+        )}
+
+        {status === 'idle' && (
+          <Text style={styles.hint}>
+            Đặt hộp thuốc ở nơi đủ sáng. Chụp gần, thấy rõ chữ trên hộp.
+          </Text>
+        )}
+
+        {imageUri && <Image source={{ uri: imageUri }} style={styles.image} />}
+
+        {loading && (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="large" color="#0B6B58" />
+            <Text style={styles.loadingText}>Đang đọc hộp thuốc…</Text>
+          </View>
+        )}
+
+        {status === 'error' && <Text style={styles.errorText}>{errorMessage}</Text>}
+
+        {status === 'done' && result && (
+          <View style={styles.card}>
+            {isMock && (
+              <Text style={styles.mockBadge}>Dữ liệu mẫu, chưa gọi AI thật</Text>
+            )}
+
+            {!result.isMedicine ? (
+              <Text style={styles.value}>
+                Đây có vẻ không phải hộp thuốc. Bác hãy chụp lại, gần hơn và đủ sáng.
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.label}>Tên thuốc</Text>
+                <Text style={styles.value}>{result.name || 'Chưa đọc rõ'}</Text>
+
+                {!!result.purpose && (
+                  <>
+                    <Text style={styles.label}>Thuốc này để làm gì</Text>
+                    <Text style={styles.value}>{result.purpose}</Text>
+                  </>
+                )}
+
+                {!!result.howToUse && (
+                  <>
+                    <Text style={styles.label}>Cách dùng</Text>
+                    <Text style={styles.value}>{result.howToUse}</Text>
+                  </>
+                )}
+
+                {result.cautions.length > 0 && (
+                  <>
+                    <Text style={styles.label}>Cần tránh, cần lưu ý</Text>
+                    {result.cautions.map((c, i) => (
+                      <Text key={i} style={styles.value}>
+                        • {c}
+                      </Text>
+                    ))}
+                  </>
+                )}
+
+                <View
+                  style={[
+                    styles.badge,
+                    { backgroundColor: CONFIDENCE_STYLE[result.confidence].bg },
+                  ]}>
+                  <Text style={[styles.badgeText, { color: CONFIDENCE_STYLE[result.confidence].fg }]}>
+                    {CONFIDENCE_STYLE[result.confidence].icon} Mức chắc chắn:{' '}
+                    {CONFIDENCE_LABEL[result.confidence]}
+                  </Text>
+                </View>
+
+                {result.askPharmacist && (
+                  <View style={styles.askBox}>
+                    <Text style={styles.askText}>
+                      Máy chưa chắc chắn. Hãy hỏi dược sĩ hoặc bác sĩ trước khi uống.
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
+
+            <View style={styles.speechRow}>
+              {speaking ? (
+                <Pressable
+                  style={({ pressed }) => [styles.btn, styles.btnStop, pressed && styles.pressed]}
+                  onPress={stopSpeaking}
+                  accessibilityRole="button">
+                  <Text style={styles.btnText}>Dừng đọc</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [styles.btn, styles.btnMain, pressed && styles.pressed]}
+                  onPress={() => speak(result)}
+                  accessibilityRole="button">
+                  <Text style={styles.btnText}>Đọc lại</Text>
+                </Pressable>
+              )}
+            </View>
+
+            {viVoiceMissing && (
+              <Text style={styles.voiceNote}>
+                Máy chưa có giọng đọc tiếng Việt. Vào Cài đặt, tìm "Chuyển văn bản thành giọng nói", rồi tải giọng tiếng Việt.
+              </Text>
+            )}
+
+            <Text style={styles.footer}>Ứng dụng không thay thế bác sĩ hay dược sĩ.</Text>
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
+const INK = '#10231F';
+const GREEN = '#0B6B58';
+
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, backgroundColor: '#0f172a', padding: 20, paddingTop: 40, alignItems: 'center' },
-  appTitle: { color: '#38bdf8', fontSize: 26, fontWeight: 'bold', marginBottom: 20 },
-  buttonMain: { backgroundColor: '#3b82f6', padding: 16, borderRadius: 12, width: '100%', maxWidth: 500, alignItems: 'center', marginBottom: 12 },
-  buttonSecondary: { backgroundColor: '#475569', padding: 16, borderRadius: 12, width: '100%', maxWidth: 500, alignItems: 'center', marginBottom: 20 },
-  buttonSpeech: { backgroundColor: '#10b981', padding: 14, borderRadius: 8, width: '100%', alignItems: 'center', marginVertical: 8 },
-  buttonStop: { backgroundColor: '#ef4444', padding: 14, borderRadius: 8, width: '100%', alignItems: 'center', marginBottom: 10 },
-  buttonText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-  errorText: { color: '#f87171', fontSize: 18, textAlign: 'center', marginVertical: 15, fontWeight: 'bold' },
-  image: { width: '100%', maxWidth: 500, height: 280, borderRadius: 12, resizeMode: 'contain', marginBottom: 20 },
-  resultCard: { backgroundColor: '#1e293b', width: '100%', maxWidth: 500, padding: 20, borderRadius: 12, borderColor: '#334155', borderWidth: 2, alignItems: 'flex-start' },
-  label: { color: '#94a3b8', fontSize: 16, marginTop: 12, fontWeight: 'bold' },
-  value: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', lineHeight: 28, marginBottom: 4 },
-  warningFooter: { color: '#facc15', fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginTop: 20, width: '100%' },
+  safe: { flex: 1, backgroundColor: '#F3F7F6' },
+  content: {
+    padding: 20,
+    paddingBottom: BottomTabInset + 32,
+    alignItems: 'center',
+    gap: 14,
+  },
+  title: { color: INK, fontSize: 34, fontWeight: '800', marginTop: 8 },
+  subtitle: { color: '#3C514C', fontSize: 20, lineHeight: 28, textAlign: 'center' },
+  hint: { color: '#3C514C', fontSize: 18, lineHeight: 26, textAlign: 'center' },
+
+  btn: {
+    width: '100%',
+    maxWidth: 520,
+    minHeight: 72,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  btnMain: { backgroundColor: GREEN },
+  btnSecondary: { backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: GREEN },
+  btnStop: { backgroundColor: '#A32020' },
+  btnText: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
+  btnSecondaryText: { color: GREEN, fontSize: 22, fontWeight: '700' },
+  pressed: { opacity: 0.8 },
+  disabled: { opacity: 0.5 },
+
+  errorText: { color: '#9B1C1C', fontSize: 20, lineHeight: 28, fontWeight: '700', textAlign: 'center' },
+  image: { width: '100%', maxWidth: 520, height: 240, borderRadius: 16, resizeMode: 'contain', backgroundColor: '#E1EAE8' },
+  loadingBox: { alignItems: 'center', gap: 10, paddingVertical: 16 },
+  loadingText: { color: INK, fontSize: 20, fontWeight: '600' },
+
+  card: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#C9D8D4',
+    padding: 20,
+    gap: 4,
+  },
+  mockBadge: { color: '#7A4B00', backgroundColor: '#FFF1CC', fontSize: 16, fontWeight: '700', padding: 8, borderRadius: 8, marginBottom: 8, alignSelf: 'flex-start' },
+  label: { color: '#3C514C', fontSize: 18, fontWeight: '700', marginTop: 14 },
+  value: { color: INK, fontSize: 24, lineHeight: 33, fontWeight: '600' },
+
+  badge: { alignSelf: 'flex-start', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginTop: 18 },
+  badgeText: { fontSize: 20, fontWeight: '800' },
+  askBox: { backgroundColor: '#FFF1CC', borderRadius: 12, padding: 14, marginTop: 12 },
+  askText: { color: '#7A4B00', fontSize: 20, lineHeight: 28, fontWeight: '700' },
+
+  speechRow: { marginTop: 20, alignItems: 'center' },
+  voiceNote: { color: '#7A4B00', fontSize: 16, lineHeight: 23, marginTop: 12 },
+  footer: { color: '#3C514C', fontSize: 16, textAlign: 'center', marginTop: 18 },
 });

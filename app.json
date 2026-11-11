@@ -1,16 +1,18 @@
 {
   "expo": {
-    "name": "thuoc-app",
+    "name": "Đọc Thuốc",
     "slug": "thuoc-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "thuocapp",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.notsleeping.thuocapp"
     },
     "android": {
+      "package": "com.notsleeping.thuocapp",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -32,7 +34,17 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Ứng dụng cần dùng camera để chụp hộp thuốc.",
+          "photosPermission": "Ứng dụng cần đọc ảnh để chọn ảnh hộp thuốc.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
