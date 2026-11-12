@@ -47,19 +47,20 @@ export default function HomeScreen() {
       Speech.stop();
     };
   }, []);
-
-  const speak = (data: ScanResult) => {
-    Speech.stop();
-    Speech.speak(buildSpeech(data), {
-      language: 'vi-VN',
-      rate: 0.85,
-      onStart: () => setSpeaking(true),
-      onDone: () => setSpeaking(false),
-      onStopped: () => setSpeaking(false),
-      onError: () => setSpeaking(false),
-    });
-  };
-
+const speak = (data: ScanResult) => {
+  Speech.stop();
+  Speech.speak(buildSpeech(data), {
+    language: 'vi-VN',
+    rate: 0.85,
+    onStart: () => setSpeaking(true),
+    onDone: () => setSpeaking(false),
+    onStopped: () => setSpeaking(false),
+    onError: (e) => {
+      console.log('Speech error:', e);
+      setSpeaking(false);
+    },
+  });
+};
   const stopSpeaking = () => {
     Speech.stop();
     setSpeaking(false);
