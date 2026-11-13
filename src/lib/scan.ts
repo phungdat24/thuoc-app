@@ -103,7 +103,11 @@ export async function scanImage(imageBase64: string): Promise<ScanOutcome> {
       body: JSON.stringify({ imageBase64, mimeType: 'image/jpeg', language: 'vi' }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`Máy chủ trả về lỗi ${res.status}`);
+    if (!res.ok) {
+  const body = await res.text().catch(() => '');
+  console.log('Server error', res.status, body.slice(0, 500));
+  throw new Error(`Máy chủ trả về lỗi ${res.status}`);
+  }
     const data = await res.json();
     return { result: normalize(data), isMock: false };
   } finally {

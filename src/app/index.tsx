@@ -80,14 +80,19 @@ const speak = (data: ScanResult) => {
       setStatus('done');
       speak(outcome.result); // Tự đọc ngay khi có kết quả
     } catch (error: any) {
-      console.error('Lỗi xử lý ảnh', error);
-      setErrorMessage(
-        error?.name === 'AbortError'
-          ? 'Máy chủ phản hồi quá lâu. Hãy kiểm tra mạng rồi thử lại.'
+  console.error('Lỗi xử lý ảnh', error);
+  const msg = String(error?.message ?? '');
+  setErrorMessage(
+    error?.name === 'AbortError'
+      ? 'Máy chủ phản hồi quá lâu. Hãy kiểm tra mạng rồi thử lại.'
+      : msg.startsWith('Máy chủ')
+        ? 'Máy chủ đang gặp sự cố. Hãy thử lại sau ít phút.'
+        : msg.includes('Network request failed')
+          ? 'Không có kết nối mạng. Hãy kiểm tra Wi-Fi hoặc 4G.'
           : 'Không đọc được hộp thuốc. Hãy chụp lại, gần hơn và đủ sáng.'
-      );
-      setStatus('error');
-    }
+  );
+  setStatus('error');
+}
   };
 
   const takePhoto = async () => {
